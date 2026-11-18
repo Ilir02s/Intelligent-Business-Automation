@@ -221,3 +221,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# FlowPilot local runtime
+frontend/node_modules/
+frontend/.next/
+frontend/next-env.d.ts
+*.tsbuildinfo
+backend/flowpilot.db
+backend/flowpilot.db-*
+!frontend/lib/
+!frontend/lib/*.ts
