@@ -117,3 +117,91 @@ def test_seed_is_persistent_and_idempotent(tmp_path):
             assert data["pending"] == 3
             assert all(entry["demo"] for entry in data["recent"])
     engine.dispose()
+
+
+def test_automation_preview_published_snapshot_and_idempotent_approval(client):
+    graph = {"name": "Refund review", "nodes": [
+        {"id": "start", "kind": "trigger", "label": "Intake", "next": "amount"},
+        {"id": "amount", "kind": "condition", "label": "Threshold", "field": "amount",
+         "operator": "greater_than", "value": "100", "next": "task", "alternate": "end"},
+        {"id": "task", "kind": "task", "label": "Review", "value": "Review {{reference}}", "next": "end"},
+        {"id": "end", "kind": "end", "label": "End"},
+    ]}
+    text = "Please refund CHF 180.00 for invoice INV-2048."
+    sample = client.post("/api/automations/preview", json={"graph": graph, "text": text}).json()
+    assert sample["status"] == "pending_approval"
+    assert [step["id"] for step in sample["trace"]] == ["start", "amount", "__required_approval__"]
+    preview = client.post("/api/automations/preview", json={
+        "graph": graph, "text": text, "decisions": ["approve"]
+    }).json()
+    assert preview["items"][0]["title"] == "Review INV-2048"
+    assert client.get("/api/automation-work-items").json() == []
+
+    automation = client.post("/api/automations", json=graph).json()
+    path = f"/api/automations/{automation['id']}"
+    assert client.post(path + "/publish").json()["version"] == 1
+    run = client.post(path + "/runs", json={"text": text, "intake_key": "ticket-1"}).json()
+    assert client.post(path + "/runs", json={"text": text, "intake_key": "ticket-1"}).json()["id"] == run["id"]
+    assert client.post(path + "/runs", json={"text": "Other", "intake_key": "ticket-1"}).status_code == 409
+
+    graph["nodes"][2]["value"] = "Changed title"
+    assert client.post(path + "/draft", json=graph).status_code == 200
+    assert client.post(path + "/publish").json()["version"] == 2
+    decision = {"text": "Verified invoice", "decision": "approve", "revision": 0}
+    review = f"/api/automation-runs/{run['id']}/decision"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: client.post(review, json=decision), range(2)))
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    items = client.get("/api/automation-work-items").json()
+    assert [item["title"] for item in items] == ["Review INV-2048"]
+    assert client.post(f"/api/automation-work-items/{items[0]['id']}/complete").json()["done"]
+
+
+def test_automation_rejects_cycles_and_leaves_draft_editable(client):
+    graph = {"name": "Loop", "nodes": [
+        {"id": "start", "kind": "trigger", "label": "Intake", "next": "work"},
+        {"id": "work", "kind": "task", "label": "Task", "next": "start"},
+    ]}
+    entry = client.post("/api/automations", json=graph).json()
+    response = client.post(f"/api/automations/{entry['id']}/publish")
+    assert response.status_code == 422
+    assert "cycles" in response.json()["detail"]
+
+
+def test_automation_resumes_named_approval_after_required_approval(client):
+    graph = {"name": "Two approvals", "nodes": [
+        {"id": "start", "kind": "trigger", "label": "Intake", "next": "assign"},
+        {"id": "assign", "kind": "assign", "label": "Owner", "next": "__required_approval__"},
+        {"id": "__required_approval__", "kind": "approval", "label": "Review",
+         "next": "task", "alternate": "end"},
+        {"id": "task", "kind": "task", "label": "Follow up", "next": "end"},
+        {"id": "end", "kind": "end", "label": "End"},
+    ]}
+    response = client.post("/api/automations/preview", json={
+        "graph": graph, "text": "Please review this refund", "decisions": ["approve", "approve"],
+    })
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert [item["title"] for item in response.json()["items"]] == ["Follow up"]
+
+
+def test_csv_validates_all_rows_before_import(client):
+    graph = {"name": "Intake", "nodes": [
+        {"id": "start", "kind": "trigger", "label": "Intake", "next": "end"},
+        {"id": "end", "kind": "end", "label": "End"},
+    ]}
+    entry = client.post("/api/automations", json=graph).json()
+    path = f"/api/automations/{entry['id']}"
+    assert client.post(path + "/publish").status_code == 200
+    for malformed in (
+        "text,text\nFirst,Second\n",
+        "text,intake_key\nFirst,one\nSecond,two,extra\n",
+        "text,intake_key\nFirst,one\nSecond\n",
+    ):
+        assert client.post(path + "/csv", json={"csv_text": malformed}).status_code == 422
+        assert client.get(path + "/runs").json() == []
+
+    csv_text = '\ufefftext,intake_key\r\n"First line\r\nSecond line",one\r\n'
+    response = client.post(path + "/csv", json={"csv_text": csv_text})
+    assert response.status_code == 200
+    assert response.json()[0]["run"]["text"] == "First line\r\nSecond line"

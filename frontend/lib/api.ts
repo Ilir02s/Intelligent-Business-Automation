@@ -31,7 +31,7 @@ export type AuditEvent = { id: number; event: string; detail: string; created_at
 export type Provider = { ollama: "disabled" | "ready" | "unavailable" | "model_missing"; model: string; fallback: boolean }
 export type Health = { status: string; database: string }
 
-const apiRoot = process.env.NEXT_PUBLIC_API_URL || "/api"
+const apiRoot = (process.env.NEXT_PUBLIC_API_URL || "/api").replace(/\/+$/, "")
 
 export async function api<T>(path: string, signal?: AbortSignal, body?: object): Promise<T> {
   let response: Response
@@ -47,7 +47,17 @@ export async function api<T>(path: string, signal?: AbortSignal, body?: object):
   }
   if (!response.ok) {
     const data = await response.json().catch(() => null)
-    throw new Error(typeof data?.detail === "string" ? data.detail : `The API returned HTTP ${response.status}.`)
+    const detail: unknown = data?.detail
+    if (typeof detail === "string") throw new Error(detail)
+    if (Array.isArray(detail)) {
+      const messages = detail.flatMap(issue => {
+        if (typeof issue?.msg !== "string") return []
+        const field = Array.isArray(issue.loc) ? issue.loc.filter((part: unknown) => part !== "body").join(".") : ""
+        return [field ? `${field}: ${issue.msg}` : issue.msg]
+      })
+      if (messages.length) throw new Error(messages.join(" "))
+    }
+    throw new Error(`The API returned HTTP ${response.status}.`)
   }
   return response.json() as Promise<T>
 }

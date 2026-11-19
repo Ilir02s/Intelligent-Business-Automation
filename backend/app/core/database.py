@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DEFAULT_DB = Path(__file__).resolve().parents[2] / "flowpilot.db"
@@ -12,7 +13,8 @@ class Base(DeclarativeBase):
 
 
 def create_database(path):
-    engine = create_engine(f"sqlite:///{path}", connect_args={"check_same_thread": False})
+    url = URL.create("sqlite", database=os.fspath(path))
+    engine = create_engine(url, connect_args={"check_same_thread": False})
 
     @event.listens_for(engine, "connect")
     def enable_foreign_keys(connection, _record):

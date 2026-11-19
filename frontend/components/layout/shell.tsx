@@ -8,6 +8,7 @@ const nav = [
   { href: "/", label: "Overview", icon: LayoutGrid },
   { href: "/requests", label: "Request processing", icon: Layers3 },
   { href: "/workflows", label: "Workflows", icon: Workflow },
+  { href: "/automations", label: "Automation builder", icon: Workflow },
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ]

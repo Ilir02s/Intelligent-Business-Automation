@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.api.automations import router as automation_router
 from app.core.database import Base, Session, engine
 from app.services.requests import seed
 
@@ -30,6 +31,7 @@ def create_app(database_engine=engine, sessions=Session, seed_demo=None):
         allow_headers=["Content-Type"],
     )
     app.include_router(router)
+    app.include_router(automation_router)
     return app
 
 
